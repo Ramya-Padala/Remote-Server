@@ -3,31 +3,21 @@ pipeline {
 
     environment {
         REMOTE_HOST = '192.168.201.140'
-        DEPLOY_DIR = '/var/www/html/index.html'
+        DEPLOY_DIR = '/var/www/html'
     }
 
     stages {
 
         stage('Checkout') {
             steps {
-                echo 'Cloning application from GitHub...'
-                git branch: 'main',
-                url: 'https://github.com/Ramya-Padala/Remote-Server.git'
+                echo 'Checking out application from GitHub...'
+                checkout scm
             }
         }
 
-        stage('Build Nginx Application') {
+        stage('Prepare Remote Server') {
             steps {
-                echo 'Installing nginx...'
-                sh '''
-                    apt install nginx -y
-                '''
-            }
-        }
-
-        stage('Deploy to Remote Server') {
-            steps {
-                echo 'Connecting to remote Linux server...'
+                echo 'Installing and configuring Nginx on remote server...'
 
                 withCredentials([
                     sshUserPrivateKey(
@@ -35,15 +25,59 @@ pipeline {
                         keyFileVariable: 'SSH_KEY',
                         usernameVariable: 'SSH_USER'
                     )
-                ]) 
+                ]) {
+                    sh '''
+                        ssh -i "$SSH_KEY" \
+                            -o BatchMode=yes \
+                            "$SSH_USER@$REMOTE_HOST" '
+                            
+                            if ! command -v nginx >/dev/null 2>&1; then
+                                sudo apt-get update
+                                sudo apt-get install -y nginx
+                            fi
+
+                            sudo systemctl enable nginx
+                            sudo systemctl start nginx
+                        '
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy Application') {
+            steps {
+                echo 'Copying application to remote server...'
+
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'remote-linux-ssh',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    sh '''
+                        tar -czf - \
+                            --exclude=.git \
+                            --exclude=Jenkinsfile \
+                            . | ssh \
+                            -i "$SSH_KEY" \
+                            -o BatchMode=yes \
+                            "$SSH_USER@$REMOTE_HOST" \
+                            "sudo mkdir -p $DEPLOY_DIR && \
+                             sudo tar -xzf - -C $DEPLOY_DIR && \
+                             sudo systemctl reload nginx"
+                    '''
+                }
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                echo 'Checking remote website...'
+                echo 'Verifying application...'
+
                 sh '''
-                    curl -f http://$192.168.201.140
+                    sleep 3
+                    curl -f http://$REMOTE_HOST/
                 '''
             }
         }
@@ -51,12 +85,11 @@ pipeline {
 
     post {
         success {
-            echo 'Application deployed successfully on remote Linux server!'
+            echo 'Application installed and deployed successfully!'
         }
 
         failure {
-            echo 'Deployment failed. Check Jenkins console output.'
+            echo 'Deployment failed. Check Jenkins Console Output.'
         }
     }
 }
-
