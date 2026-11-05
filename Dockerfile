@@ -1,4 +1,4 @@
 FROM nginx:latest
-WORKDIR /var/www/html/index.html
+WORKDIR /var/www/app
 COPY . .
 EXPOSE 80
